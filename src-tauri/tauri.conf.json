@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SCANNY",
+  "version": "1.0.0",
+  "identifier": "com.scanny.optimizer",
+  "build": {
+    "frontendDist": "../scanny-ui",
+    "devUrl": "http://localhost:4173",
+    "beforeDevCommand": "python3 -m http.server 4173 --directory scanny-ui",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{
+      "title": "SCANNY",
+      "width": 1280,
+      "height": 820,
+      "minWidth": 980,
+      "minHeight": 640,
+      "resizable": true,
+      "fullscreen": false
+    }],
+    "security": {"csp": null}
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.png"]
+  }
+}
