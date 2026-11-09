@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCANNY</title>
+  <meta name="description" content="SCANNY: analisar, limpar e melhorar o Windows com transparência.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" href="assets/app-icon-64.png" type="image/png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip" href="#view">Pular para o conteúdo</a>
+
+  <div class="app">
+    <aside class="sidebar" aria-label="Menu principal">
+      <div class="brand">
+        <img src="assets/app-icon.png" alt="" width="30" height="30">
+        <div>
+          <strong>SCANNY</strong>
+          <span class="muted small">Analise. Limpe. Melhore.</span>
+        </div>
+      </div>
+      <nav id="nav" class="nav" aria-label="Páginas"></nav>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="crumbs" id="crumbs">SCANNY</div>
+        <div class="top-right">
+          <span class="pill" id="prot"><span class="dot"></span>Proteção</span>
+          <span class="pill" id="priv"></span>
+          <button class="btn ghost small-btn" data-action="restore"><span data-icon="restore"></span> Ponto de restauração</button>
+          <button class="icon-btn" data-action="notifs" aria-label="Notificações" title="Notificações"><span data-icon="bell"></span></button>
+          <button class="icon-btn" data-action="go" data-arg="configuracoes" aria-label="Configurações" title="Configurações"><span data-icon="cog"></span></button>
+        </div>
+      </header>
+
+      <main id="view" class="view" tabindex="-1"></main>
+
+      <footer class="foot">
+        <span>Versão <span id="f-ver"></span></span>
+        <span>Última análise: <span id="f-analysis"></span></span>
+        <span>Última limpeza: <span id="f-clean"></span></span>
+        <span id="f-admin"></span>
+        <span class="foot-links">
+          <button class="link" data-action="log"><span data-icon="book"></span> Logs</button>
+          <button class="link" data-action="show-path" data-arg="https://github.com/">
+            <span data-icon="github"></span> Repositório
+          </button>
+        </span>
+      </footer>
+    </div>
+  </div>
+
+  <input type="file" id="backup-file" accept="application/json" hidden>
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="js/data.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/views.js"></script>
+  <script src="js/recomendacoes.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
