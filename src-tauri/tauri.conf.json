@@ -11,20 +11,30 @@
   },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{
-      "title": "SCANNY",
-      "width": 1280,
-      "height": 820,
-      "minWidth": 980,
-      "minHeight": 640,
-      "resizable": true,
-      "fullscreen": false
-    }],
-    "security": {"csp": null}
+    "windows": [
+      {
+        "title": "SCANNY",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
-    "icon": ["icons/icon.png"]
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
   }
 }
