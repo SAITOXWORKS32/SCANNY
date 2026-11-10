@@ -2,7 +2,7 @@
  * Regra de ouro: analisar nunca altera nada. Toda mudança passa por confirmação (quando necessária),
  * é registrada no histórico e, quando possível, pode ser desfeita. */
 
-const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.5 (desktop)' : '1.0.5 (protótipo)';
+const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.6 (desktop)' : '1.0.6 (protótipo)';
 
 const DEFAULT_STATE = {
   settings: {
@@ -26,7 +26,7 @@ const DEFAULT_STATE = {
   startupOff: {},
   privacy: { anuncios: true, iniciar: true, historico: true, localizacao: true, camera: true, explorador: true },
   analysis: { status: 'idle', step: 0, results: false, when: null },
-  clean: { analyzed: false, running: false, progress: null, selected: [], recycle: false, browser: false, result: null },
+  clean: { analyzed: false, running: false, progress: null, selected: [], allTempCaches: false, recycle: false, browser: false, result: null },
   repair: null,
   powerPlan: null,
   games: { measure: null },
@@ -272,15 +272,29 @@ const ACTIONS = {
 
   async 'limpeza-run'() { await cleanRun(); },
 
+  'cache-toggle-all'(el) {
+    const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id);
+    S.clean.allTempCaches = !!el?.checked;
+    S.clean.selected = S.clean.allTempCaches ? [...new Set(ids)] : [];
+    render();
+  },
+
+  async 'cache-open'(id) {
+    if (!SCANNY_NATIVE.available) return toast('Abrir pastas só está disponível na aplicação Windows.', 'warn');
+    try { const path = await SCANNY_NATIVE.openCacheFolder(id); toast(`Pasta aberta: ${path}`); }
+    catch (err) { toast(`Não foi possível abrir a pasta: ${err}`, 'bad'); }
+  },
+
   'limpeza-clear'() {
     S.clean.selected = [];
+    S.clean.allTempCaches = false;
     S.clean.recycle = false;
     S.clean.browser = false;
     render();
   },
 
   'limpeza-nova'() {
-    S.clean = { ...S.clean, analyzed: false, result: null, selected: [], recycle: false, browser: false };
+    S.clean = { ...S.clean, analyzed: false, result: null, selected: [], allTempCaches: false, recycle: false, browser: false };
     render();
   },
 
@@ -531,19 +545,30 @@ async function cleanAnalyze() {
   S.clean = { ...S.clean, running: true, result: null, progress: null };
   render();
   await sleep(900);
+  if (SCANNY_NATIVE.available) {
+    try {
+      const found = await SCANNY_NATIVE.analyzeCleanup();
+      S.nativeCleanup = found;
+      const cache = found.map((x) => ({ id: x.id, name: x.name, size: x.bytes / 1073741824, safe: true, note: `${x.files} ficheiro(s); recentes/em uso serão ignorados.` }));
+      S.nativeData = { ...(S.nativeData || {}), cleanup: cache };
+      S.clean = { ...S.clean, running: false, analyzed: true, selected: cache.map((c) => c.id), allTempCaches: true, recycle: false, browser: false };
+      render();
+      return;
+    } catch (err) { S.clean = { ...S.clean, running: false }; render(); return toast(`Não foi possível analisar os caches: ${err}`, 'bad'); }
+  }
   const safe = dataFor(S).cleanup.filter((c) => c.safe).map((c) => c.id);
-  S.clean = { ...S.clean, running: false, analyzed: true, selected: safe, recycle: false, browser: false };
+  S.clean = { ...S.clean, running: false, analyzed: true, selected: safe, allTempCaches: true, recycle: false, browser: false };
   render();
 }
 
 async function cleanRun() {
   const d = dataFor(S);
   if (SCANNY_NATIVE.available) {
-    const roots = (S.nativeCleanup || []).filter((x) => S.clean.selected.includes(x.id)).map((x) => x.name);
-    if (!roots.length) return toast('Selecione ao menos uma pasta temporária analisada.', 'warn');
-    const ok = await openModal({ title: 'Confirmar limpeza real', danger: true, body: `<p>O SCANNY vai remover arquivos dentro das pastas temporárias permitidas.</p><p class="small muted">Arquivos em uso serão ignorados. Downloads e arquivos pessoais não entram nesta operação.</p>`, buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar agora', value: 'ok', cls: 'danger' }] });
+    const ids = (S.nativeCleanup || []).filter((x) => S.clean.selected.includes(x.id)).map((x) => x.id);
+    if (!ids.length) return toast('Selecione pelo menos um cache temporário analisado.', 'warn');
+    const ok = await openModal({ title: 'Confirmar limpeza segura', danger: true, body: `<p>O SCANNY removerá apenas o conteúdo das pastas de cache temporário selecionadas.</p><p class="small muted">A pasta-base, Downloads, documentos, dados pessoais e ficheiros recentes/em uso ficam protegidos. Nada fora da lista permitida será tocado.</p>`, buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar caches', value: 'ok', cls: 'danger' }] });
     if (ok !== 'ok') return;
-    try { const [freed, removed] = await SCANNY_NATIVE.cleanPaths(roots); S.clean = { ...S.clean, analyzed: true, selected: [], result: { freed: freed / 1073741824, skipped: 0, errors: 0, time: `${removed} arquivo(s)` } }; S.lastClean = nowText(); pushHistory({ category: 'Limpeza', action: 'Limpeza de temporários', result: `${removed} arquivo(s) removido(s)` }); render(); return toast(`Limpeza concluída: ${removed} arquivo(s) removido(s).`); } catch (err) { return toast(`Falha na limpeza: ${err}`, 'bad'); }
+    try { const [freed, removed] = await SCANNY_NATIVE.cleanCacheIds(ids); S.clean = { ...S.clean, analyzed: true, selected: [], allTempCaches: false, result: { freed: freed / 1073741824, skipped: 0, errors: 0, time: `${removed} arquivo(s)` } }; S.lastClean = nowText(); pushHistory({ category: 'Caches e Dados', action: 'Limpeza de caches temporários', result: `${removed} arquivo(s) removido(s)` }); render(); return toast(`Limpeza concluída: ${removed} arquivo(s) removido(s).`); } catch (err) { return toast(`Falha na limpeza: ${err}`, 'bad'); }
   }
   if (!S.settings.sample) return toast('Ative os dados de exemplo para simular a limpeza.', 'warn');
 
@@ -577,7 +602,7 @@ async function cleanRun() {
   const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
   S.clean = {
     ...S.clean,
-    running: false, progress: null, analyzed: true, selected: [], recycle: false, browser: false,
+    running: false, progress: null, analyzed: true, selected: [], allTempCaches: false, recycle: false, browser: false,
     result: { freed, skipped: 0, errors: 0, time: `${secs} s` },
   };
   S.lastClean = nowText();
@@ -677,10 +702,18 @@ function bindEvents() {
     if (t.dataset.check === 'clean') {
       const id = t.value;
       S.clean.selected = t.checked ? [...new Set([...S.clean.selected, id])] : S.clean.selected.filter((x) => x !== id);
+      const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id);
+      if (ids.length) S.clean.allTempCaches = ids.every((x) => S.clean.selected.includes(x));
       return render();
     }
     if (t.dataset.check === 'recycle') { S.clean.recycle = t.checked; return render(); }
     if (t.dataset.check === 'browser') { S.clean.browser = t.checked; return render(); }
+    if (t.dataset.check === 'all-caches') {
+      const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id);
+      S.clean.allTempCaches = t.checked;
+      S.clean.selected = t.checked ? [...new Set(ids)] : [];
+      return render();
+    }
     if (t.dataset.check === 'effect') {
       S.effects.custom = { ...(S.effects.custom || S.effects.current), [t.value]: t.checked };
       render();

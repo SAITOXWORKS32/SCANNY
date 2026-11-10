@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::{env, fs, path::{Path, PathBuf}, process::Command};
+use std::{env, fs, path::{Path, PathBuf}, process::Command, time::{Duration, SystemTime}};
 use sysinfo::{Disks, System};
 use walkdir::WalkDir;
 
@@ -62,6 +62,25 @@ fn safe_roots() -> Vec<PathBuf> {
     roots.sort(); roots.dedup(); roots
 }
 
+fn cache_id_path(id: &str) -> Result<PathBuf, String> {
+    let path = match id {
+        "temp-user" => env::var_os("TEMP").map(PathBuf::from).ok_or("TEMP não definido")?,
+        "temp-win" if cfg!(windows) => PathBuf::from(r"C:\Windows\Temp"),
+        _ => return Err(format!("Cache não permitido: {}", id)),
+    };
+    if !path.exists() { return Err(format!("Pasta não encontrada: {}", path.display())); }
+    Ok(path)
+}
+
+fn removable_file(path: &Path) -> bool {
+    let meta = match fs::metadata(path) { Ok(m) => m, Err(_) => return false };
+    if !meta.is_file() { return false; }
+    if let Ok(modified) = meta.modified() {
+        if SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO) < Duration::from_secs(24 * 60 * 60) { return false; }
+    }
+    true
+}
+
 fn allowed(path: &Path) -> bool {
     let candidate = match fs::canonicalize(path) { Ok(p) => p, Err(_) => path.to_path_buf() };
     safe_roots().iter().any(|root| { let root = fs::canonicalize(root).unwrap_or_else(|_| root.clone()); candidate.starts_with(&root) && candidate != root })
@@ -74,13 +93,24 @@ fn system_info() -> NativeInfo { NativeInfo { os: env::consts::OS.to_string(), a
 fn analyze_cleanup() -> Vec<Item> { safe_roots().into_iter().enumerate().map(|(i, path)| { let (bytes, files) = bytes_in(&path); Item { id: if i == 0 { "temp-user".into() } else { "temp-win".into() }, name: path.display().to_string(), bytes, files } }).collect() }
 
 #[tauri::command]
-fn clean_paths(paths: Vec<String>) -> Result<(u64, u64), String> {
+fn clean_cache_ids(ids: Vec<String>) -> Result<(u64, u64), String> {
     let mut freed = 0; let mut removed = 0;
-    for raw in paths { let path = PathBuf::from(raw); if !allowed(&path) { return Err(format!("Caminho não permitido: {}", path.display())); }
-        if path.is_file() { let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0); fs::remove_file(&path).map_err(|e| e.to_string())?; freed += size; removed += 1; }
-        else if path.is_dir() { for e in WalkDir::new(&path).contents_first(true).into_iter().filter_map(Result::ok) { let p = e.path(); if p == path { continue; } if p.is_file() { let size = fs::metadata(p).map(|m| m.len()).unwrap_or(0); if fs::remove_file(p).is_ok() { freed += size; removed += 1; } } else if p.is_dir() { let _ = fs::remove_dir(p); } } }
+    for id in ids { let path = cache_id_path(&id)?;
+        for e in WalkDir::new(&path).contents_first(true).into_iter().filter_map(Result::ok) {
+            let p = e.path(); if p == path { continue; }
+            if removable_file(p) { let size = fs::metadata(p).map(|m| m.len()).unwrap_or(0); if fs::remove_file(p).is_ok() { freed += size; removed += 1; } }
+            else if p.is_dir() { let _ = fs::remove_dir(p); }
+        }
     }
     Ok((freed, removed))
+}
+
+#[tauri::command]
+fn open_cache_folder(id: String) -> Result<String, String> {
+    let path = cache_id_path(&id)?;
+    if !cfg!(windows) { return Ok(path.display().to_string()); }
+    Command::new("explorer").arg(&path).spawn().map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 #[tauri::command]
@@ -108,4 +138,4 @@ fn run_repair(id: String) -> Result<String, String> {
     if out.status.success() { Ok(text) } else { Err(text) }
 }
 
-fn main() { tauri::Builder::default().invoke_handler(tauri::generate_handler![system_info, system_snapshot, analyze_cleanup, clean_paths, apply_visual_profile, create_restore_point, run_repair]).run(tauri::generate_context!()).expect("error while running SCANNY"); }
+fn main() { tauri::Builder::default().invoke_handler(tauri::generate_handler![system_info, system_snapshot, analyze_cleanup, clean_cache_ids, open_cache_folder, apply_visual_profile, create_restore_point, run_repair]).run(tauri::generate_context!()).expect("error while running SCANNY"); }

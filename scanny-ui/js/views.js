@@ -25,6 +25,7 @@ const EMPTY_DATA = {
   ram: { total: null, used: null, speed: null, type: null, sticks: null, top: null },
   disks: [],
   cleanup: SCANNY_SAMPLE.cleanup.map((c) => ({ ...c, size: null })),
+  cacheFolders: SCANNY_SAMPLE.cacheFolders,
   recycle: { size: null },
   browserCache: { size: null },
   startup: [],
@@ -258,6 +259,7 @@ function vLimpeza(S) {
     </label>`;
 
   const result = c.result;
+  const caches = S.nativeCleanup?.length ? S.nativeCleanup : (d.cacheFolders || []);
   return `
   <header class="page-head">
     <h1>Limpeza</h1>
@@ -296,6 +298,13 @@ function vLimpeza(S) {
       </label>
     </aside>
   </div>
+
+  <section class="block" id="caches-dados">
+    <div class="row-between"><div><h2>Caches e Dados</h2><p class="muted small">Área protegida: apenas caches temporários permitidos. Dados pessoais e pastas-base nunca entram na limpeza.</p></div>
+      <label class="check compact"><input type="checkbox" data-check="all-caches" ${c.allTempCaches ? 'checked' : ''} ${c.analyzed ? '' : 'disabled'}><span class="box"></span><span class="check-t"><strong>Deletar todos os caches temporários?</strong><span>Ficheiros recentes ou em uso serão ignorados.</span></span></label>
+    </div>
+    <div class="checks cache-list">${caches.map((x) => `<div class="row"><div class="row-main"><strong>${esc(x.name)}</strong><span>${esc(x.path || `${x.files ?? 0} ficheiro(s) analisado(s)`)} · ${esc(x.note || 'Cache temporário permitido')}</span></div><div class="row-end"><button class="link-btn" data-action="cache-open" data-arg="${esc(x.id)}">Abrir pasta</button></div></div>`).join('')}</div>
+  </section>
 
   <div class="floating${selCount ? '' : ' idle'}">
     <div>

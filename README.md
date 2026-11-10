@@ -15,6 +15,7 @@ SCANNY é um protótipo de uma central leve e transparente para analisar, limpar
 - Dashboard de visão geral;
 - Telas de análise, limpeza, desempenho, inicialização, armazenamento, jogos, reparos, privacidade, segurança, histórico e configurações;
 - Fluxos de confirmação, cancelamento, histórico e desfazer;
+- Secção **Caches e Dados**, com toggle para selecionar todos os caches temporários e botão para abrir cada pasta;
 - Estado de dados de exemplo desligado por padrão;
 - Dados de exemplo opcionais para apresentar a interface preenchida;
 - Ícone do aplicativo;
@@ -94,7 +95,7 @@ A demonstração web foi desenhada para não fingir que executou uma operação 
 - envia telemetria própria;
 - possui assinatura digital de código ou atualização automática.
 
-A próxima etapa será criar uma camada nativa para Windows com permissões explícitas, prévia, backup, verificação e desfazer. Nenhuma função destrutiva deve ser adicionada sem esses controles.
+Na limpeza nativa, apenas IDs de cache temporário allowlisted podem ser processados. A pasta-base nunca é removida, ficheiros recentes (menos de 24 horas) e ficheiros em uso são ignorados, e Downloads, documentos, dados pessoais, lixeira e caches de navegador ficam fora da otimização segura. Nenhuma função destrutiva deve ser adicionada sem estes controles.
 
 ## Mídia
 

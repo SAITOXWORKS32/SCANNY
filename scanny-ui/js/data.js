@@ -46,6 +46,11 @@ window.SCANNY_SAMPLE = {
     { id: 'logs-old', name: 'Logs antigos', size: 0.05, risk: 'baixo', safe: false, note: 'Apenas logs antigos. Logs recentes de diagnóstico ficam de fora.' },
   ],
 
+  cacheFolders: [
+    { id: 'temp-user', name: 'Cache temporário do usuário', path: '%TEMP%', note: 'Arquivos em uso ou recentes são ignorados.' },
+    { id: 'temp-win', name: 'Cache temporário do Windows', path: 'C:\\\\Windows\\\\Temp', note: 'A pasta-base nunca é removida.' },
+  ],
+
   recycle: { size: 1.2 },
   browserCache: { size: 0.8 },
 
