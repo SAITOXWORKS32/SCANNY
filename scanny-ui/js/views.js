@@ -37,7 +37,7 @@ const EMPTY_DATA = {
 };
 
 function dataFor(S) {
-  if (S.settings.sample) return SCANNY_SAMPLE;
+  if (S.settings.sample && !SCANNY_NATIVE.available) return SCANNY_SAMPLE;
   if (S.nativeData) return { ...EMPTY_DATA, ...S.nativeData };
   return EMPTY_DATA;
 }

@@ -2,7 +2,7 @@
  * Regra de ouro: analisar nunca altera nada. Toda mudança passa por confirmação (quando necessária),
  * é registrada no histórico e, quando possível, pode ser desfeita. */
 
-const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.2 (desktop)' : '1.0.2 (protótipo)';
+const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.3 (desktop)' : '1.0.3 (protótipo)';
 
 const DEFAULT_STATE = {
   settings: {
@@ -727,6 +727,8 @@ function bindEvents() {
 
 function init() {
   S = mergeState(DEFAULT_STATE, store.load(DEFAULT_STATE));
+  // O executável desktop nunca usa os dados fictícios do modo demonstração.
+  if (SCANNY_NATIVE.available) S.settings.sample = false;
   // Estados de execução nunca sobrevivem a um recarregamento.
   S.analysis = { ...S.analysis, status: S.analysis.results ? 'done' : 'idle' };
   S.clean = { ...S.clean, running: false, progress: null };
