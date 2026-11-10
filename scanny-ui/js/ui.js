@@ -23,20 +23,6 @@ function nowText() {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/* Selos de estado usados na análise e nas tabelas. */
-const STATE_BADGE = {
-  normal: ['Normal', 'b-normal'],
-  atencao: ['Atenção', 'b-atencao'],
-  recomendado: ['Recomendado', 'b-recomendado'],
-  avancado: ['Avançado', 'b-avancado'],
-  bloqueado: ['Bloqueado', 'b-bloqueado'],
-  naodisponivel: ['Não disponível', 'b-neutro'],
-};
-function badge(key) {
-  const [label, cls] = STATE_BADGE[key] || STATE_BADGE.naodisponivel;
-  return `<span class="badge ${cls}"><span class="dot"></span>${label}</span>`;
-}
-
 /* Níveis de risco do documento (seção 7). */
 const RISK = {
   seguro: ['Seguro', 'r-seguro'],

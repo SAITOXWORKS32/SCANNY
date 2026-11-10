@@ -47,8 +47,8 @@ window.SCANNY_SAMPLE = {
   ],
 
   cacheFolders: [
-    { id: 'temp-user', name: 'Cache temporário do usuário', path: '%TEMP%', note: 'Arquivos em uso ou recentes são ignorados.' },
-    { id: 'temp-win', name: 'Cache temporário do Windows', path: 'C:\\\\Windows\\\\Temp', note: 'A pasta-base nunca é removida.' },
+    { id: 'temp-user', name: 'Cache temporário do usuário', path: '%TEMP%', note: 'Arquivos recentes ou em uso são ignorados.' },
+    { id: 'temp-win', name: 'Cache temporário do Windows', path: 'C:\\Windows\\Temp', note: 'A pasta-base nunca é removida.' },
   ],
 
   recycle: { size: 1.2 },
@@ -100,6 +100,29 @@ window.SCANNY_SAMPLE = {
     { name: 'instalador_antigo.iso', path: 'D:\\Downloads\\instalador_antigo.iso', size: 4.2, date: '02/06/2026' },
     { name: 'backup_2024.zip', path: 'D:\\Arquivos\\backup_2024.zip', size: 2.9, date: '11/01/2025' },
     { name: 'videos_brutos.mp4', path: 'D:\\Projetos\\videos_brutos.mp4', size: 1.7, date: '17/09/2026' },
+  ],
+
+  /* Arquivo do SCANNY: cópias guardadas pelo app antes de um arquivo sair do Windows.
+   * status: 'nos-dois' = o original ainda existe no Windows; 'so-scanny' = só a cópia do SCANNY existe.
+   * conflict: true = não dá para restaurar no caminho original (já existe outro arquivo ali). */
+  archive: [
+    { id: 'a1', name: 'instalador_antigo.iso', kind: 'instalador', path: 'D:\\Downloads\\instalador_antigo.iso', size: 4.2, origin: 'Arquivo grande', archivedAt: '08/11/2026 16:40', status: 'nos-dois', conflict: false },
+    { id: 'a2', name: 'backup_2024.zip', kind: 'compactado', path: 'D:\\Arquivos\\backup_2024.zip', size: 2.9, origin: 'Arquivo grande', archivedAt: '06/11/2026 10:12', status: 'nos-dois', conflict: false },
+    { id: 'a3', name: 'videos_brutos.mp4', kind: 'video', path: 'D:\\Projetos\\videos_brutos.mp4', size: 1.7, origin: 'Arquivo grande', archivedAt: '03/11/2026 09:30', status: 'nos-dois', conflict: false },
+    { id: 'a4', name: 'relatorio_final.docx', kind: 'documento', path: 'C:\\Users\\Usuario\\Documents\\relatorio_final.docx', size: 0.012, origin: 'Exclusão manual', archivedAt: '01/11/2026 18:05', status: 'so-scanny', conflict: true },
+    { id: 'a5', name: 'foto_viagem_01.jpg', kind: 'imagem', path: 'C:\\Users\\Usuario\\Pictures\\foto_viagem_01.jpg', size: 0.0048, origin: 'Exclusão manual', archivedAt: '28/10/2026 21:11', status: 'so-scanny', conflict: false },
+    { id: 'a6', name: 'setup_driver_v2.exe', kind: 'instalador', path: 'D:\\Downloads\\setup_driver_v2.exe', size: 0.38, origin: 'Exclusão manual', archivedAt: '20/10/2026 11:48', status: 'so-scanny', conflict: false },
+    { id: 'a7', name: 'projeto_antigo.zip', kind: 'compactado', path: 'D:\\Projetos\\projeto_antigo.zip', size: 0.92, origin: 'Arquivo grande', archivedAt: '15/10/2026 08:20', status: 'so-scanny', conflict: false },
+  ],
+
+  /* Registro de arquivos tocados pelo app (aparece em Recentes). type: arquivado | restaurado | removido | grande */
+  fileLog: [
+    { id: 'f1', when: '10/11/2026 08:14', name: 'videos_brutos.mp4', path: 'D:\\Projetos', type: 'grande', text: 'Encontrado entre os arquivos grandes' },
+    { id: 'f2', when: '08/11/2026 16:40', name: 'instalador_antigo.iso', path: 'D:\\Downloads', type: 'arquivado', text: 'Cópia guardada no arquivo do SCANNY' },
+    { id: 'f3', when: '06/11/2026 10:12', name: 'backup_2024.zip', path: 'D:\\Arquivos', type: 'arquivado', text: 'Cópia guardada no arquivo do SCANNY' },
+    { id: 'f4', when: '01/11/2026 18:05', name: 'relatorio_final.docx', path: 'C:\\Users\\Usuario\\Documents', type: 'arquivado', text: 'Excluído e guardado no arquivo do SCANNY' },
+    { id: 'f5', when: '28/10/2026 21:11', name: 'foto_viagem_01.jpg', path: 'C:\\Users\\Usuario\\Pictures', type: 'arquivado', text: 'Excluído e guardado no arquivo do SCANNY' },
+    { id: 'f6', when: '20/10/2026 11:48', name: 'setup_driver_v2.exe', path: 'D:\\Downloads', type: 'arquivado', text: 'Excluído e guardado no arquivo do SCANNY' },
   ],
 
   repairs: [

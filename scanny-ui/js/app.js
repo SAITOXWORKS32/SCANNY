@@ -2,7 +2,7 @@
  * Regra de ouro: analisar nunca altera nada. Toda mudança passa por confirmação (quando necessária),
  * é registrada no histórico e, quando possível, pode ser desfeita. */
 
-const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.6 (desktop)' : '1.0.6 (protótipo)';
+const APP_VERSION = SCANNY_NATIVE?.available ? '1.1.0 (desktop)' : '1.1.0 (protótipo)';
 
 const DEFAULT_STATE = {
   settings: {
@@ -16,6 +16,8 @@ const DEFAULT_STATE = {
     logs: true,
     autoCheck: false,
     gameBar: false,
+    archiveBeforeDelete: true, // guarda cópia no Arquivo do SCANNY antes de excluir arquivo grande
+    archiveLimit: 20,          // GB
   },
   effects: {
     profile: 'equilibrado',
@@ -30,12 +32,20 @@ const DEFAULT_STATE = {
   repair: null,
   powerPlan: null,
   games: { measure: null },
+  archive: [],     // Arquivo do SCANNY: cópias guardadas pelo app
+  fileLog: [],     // Recentes: arquivos que o app tocou
+  gone: {},        // caminhos de arquivos excluídos na simulação (somem de Armazenamento)
+  seeded: false,   // dados de exemplo do arquivo já foram colocados
   history: [],
   lastAnalysis: null,
   lastClean: null,
   lastBackup: null,
-  nativeData: null,
-  ui: { perfTab: 'efeitos', initFilter: 'todos', histFilter: 'todas' },
+  ui: {
+    perfTab: 'efeitos', initFilter: 'todos', histFilter: 'todas',
+    refresh: 5,                 // Ao vivo: segundos entre leituras (0 = pausado)
+    archStatus: 'todos', archType: 'todos', archSort: 'recentes', archQuery: '',
+    recFilter: 'todos',
+  },
 };
 
 /* Cópia profunda simples (o estado é só JSON). */
@@ -55,6 +65,7 @@ function mergeState(base, saved) {
 
 let S = DEFAULT_STATE;
 let repairSignal = { cancelled: false };
+let NAV_Q = '';   // busca na barra lateral (só na tela)
 
 /* Efeito "alvo" = o que o botão Aplicar vai deixar ativo. */
 function effTarget(s) {
@@ -66,37 +77,44 @@ function effTarget(s) {
 const countOn = (o) => Object.values(o).filter(Boolean).length;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/* Menu em categorias. Cada categoria abre a sua lista de subcategorias.
- * Rota: #/pagina ou #/pagina/subcategoria (ex.: #/desempenho/hardware). */
+
+/* Menu em grupos e categorias. Cada categoria abre a sua lista de subcategorias.
+ * Rota: #/pagina ou #/pagina/subcategoria (ex.: #/visao-geral/recomendacoes). */
 const NAV = [
-  { cat: 'Visão geral', icon: 'home', items: [
+  { group: 'Painel', cat: 'Início', icon: 'home', items: [
     { title: 'Resumo', page: 'visao-geral' },
     { title: 'Recomendações', page: 'visao-geral', sub: 'recomendacoes' },
-    { title: 'Atividade', page: 'visao-geral', sub: 'atividade' },
   ] },
-  { cat: 'Otimização', icon: 'sparkles', items: [
+  { group: 'Painel', cat: 'Arquivos', icon: 'archive', items: [
+    { title: 'Arquivo do SCANNY', page: 'arquivo' },
+    { title: 'Recentes', page: 'recentes' },
+    { title: 'Armazenamento', page: 'armazenamento' },
+  ] },
+  { group: 'Painel', cat: 'Atividade', icon: 'wave', items: [
+    { title: 'Ao vivo', page: 'ao-vivo' },
+    { title: 'Histórico', page: 'historico' },
+  ] },
+  { group: 'Ferramentas', cat: 'Otimização', icon: 'sparkles', items: [
     { title: 'Análise', page: 'analisar' },
     { title: 'Limpeza', page: 'limpeza' },
     { title: 'Desempenho', page: 'desempenho' },
     { title: 'Inicialização', page: 'inicializacao' },
   ] },
-  { cat: 'Sistema', icon: 'disk', items: [
-    { title: 'Armazenamento', page: 'armazenamento' },
+  { group: 'Ferramentas', cat: 'Sistema', icon: 'wrench', items: [
     { title: 'Jogos', page: 'jogos' },
     { title: 'Reparos', page: 'reparos' },
   ] },
-  { cat: 'Proteção', icon: 'shield', items: [
+  { group: 'Ferramentas', cat: 'Proteção', icon: 'shield', items: [
     { title: 'Privacidade', page: 'privacidade' },
     { title: 'Segurança e restauração', page: 'seguranca' },
-    { title: 'Histórico', page: 'historico' },
   ] },
-  { cat: 'Aplicativo', icon: 'cog', items: [
+  { group: 'Aplicativo', cat: 'Aplicativo', icon: 'cog', items: [
     { title: 'Configurações', page: 'configuracoes' },
     { title: 'Sobre', page: 'sobre' },
   ] },
 ];
 const DEFAULT_SUB = {};
-const ANCHOR = { recomendacoes: 'rec-all', atividade: 'atividade' };
+const ANCHOR = { recomendacoes: 'rec-all' };
 
 function parseRoute() {
   const [p, sub] = location.hash.replace(/^#\/?/, '').split('/');
@@ -107,13 +125,12 @@ const sameItem = (i, r) => i.page === r.page && (i.sub ?? DEFAULT_SUB[i.page] ??
 const itemPath = (i) => (i.sub ? `${i.page}/${i.sub}` : i.page);
 const catOf = (r) => NAV.find((c) => c.items.some((i) => sameItem(i, r)))?.cat ?? null;
 const findItem = (r) => NAV.flatMap((c) => c.items).find((i) => sameItem(i, r)) ?? null;
-const pageIdFromHash = () => parseRoute().page;
 
 function save() { store.save(S); }
 
 function pushHistory(entry) {
   S.history.unshift({
-    id: `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    id: newId('h'),
     when: nowText(),
     user: 'Usuario',
     category: '',
@@ -125,6 +142,31 @@ function pushHistory(entry) {
     ...entry,
   });
   S.history = S.history.slice(0, 200);
+}
+
+/* Identificador curto para histórico, arquivo e registro. */
+function newId(p) { return `${p}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; }
+
+function logFile(type, name, path, text) {
+  S.fileLog.unshift({ id: newId('f'), when: nowText(), name, path, type, text });
+  S.fileLog = S.fileLog.slice(0, 200);
+}
+
+/* Guarda uma cópia do arquivo no Arquivo do SCANNY (antes de sair do Windows). */
+function archiveFile(f, origin) {
+  S.archive.unshift({
+    id: newId('a'), name: f.name, kind: kindOf(f.name), path: f.path, size: f.size,
+    origin, archivedAt: nowText(), status: 'so-scanny', conflict: false,
+  });
+  logFile('arquivado', f.name, f.path, 'Cópia guardada no arquivo do SCANNY');
+}
+
+/* Primeira vez com dados de exemplo: preenche o arquivo e o registro de recentes. */
+function seedSample() {
+  if (S.seeded) return;
+  S.archive = clone(SCANNY_SAMPLE.archive);
+  S.fileLog = clone(SCANNY_SAMPLE.fileLog);
+  S.seeded = true;
 }
 
 function applyTheme() {
@@ -143,20 +185,29 @@ function buildNav() {
   const r = parseRoute();
   const active = catOf(r);
   const open = S.ui.openCat ?? active;     // '' = usuário fechou a categoria
-  $('#nav').innerHTML = NAV.map((c) => {
-    const isOpen = c.cat === open;
-    return `<div class="cat-group${isOpen ? ' open' : ''}">
+  const q = NAV_Q.trim().toLowerCase();
+  const match = (i) => !q || i.title.toLowerCase().includes(q);
+  let html = '';
+  let lastGroup = null;
+
+  for (const c of NAV) {
+    const items = c.items.filter(match);
+    if (q && !items.length) continue;
+    if (c.group !== lastGroup) { html += `<p class="nav-group">${esc(c.group)}</p>`; lastGroup = c.group; }
+    const isOpen = q ? true : c.cat === open;
+    html += `<div class="cat-group${isOpen ? ' open' : ''}">
       <button class="cat${c.cat === active ? ' on' : ''}" data-action="cat" data-arg="${esc(c.cat)}" aria-expanded="${isOpen}">
         ${icon(c.icon)}<span>${esc(c.cat)}</span>${icon('chevron', 'chev')}
       </button>
       <ul class="sub-list"${isOpen ? '' : ' hidden'}>
-        ${c.items.map((i) => {
+        ${items.map((i) => {
     const on = sameItem(i, r);
     return `<li><button class="sub-item${on ? ' on' : ''}" data-action="go" data-arg="${itemPath(i)}"${on ? ' aria-current="page"' : ''}>${esc(i.title)}</button></li>`;
   }).join('')}
       </ul>
     </div>`;
-  }).join('');
+  }
+  $('#nav').innerHTML = html || `<p class="muted small nav-empty">Nada com "${esc(NAV_Q)}".</p>`;
 }
 
 function renderChrome() {
@@ -174,6 +225,14 @@ function renderChrome() {
 
   $('#priv').innerHTML = `${icon('user', 'ic-sm')} Usuário normal`;
 
+  /* Bloco do computador na barra lateral. */
+  const c = d.disks[0];
+  const pct = c ? Math.round((c.used / c.total) * 100) : null;
+  $('#pc').innerHTML = `
+    <div class="pc-t"><strong>${esc(val(d.os.name))}</strong><span class="muted small">${esc(val(d.os.version))}</span></div>
+    <div class="line"><span style="width:${pct ?? 0}%"></span></div>
+    <span class="muted small">${c ? `Disco C: ${pct}% usado · ${gb(c.total - c.used)} livres` : NA}</span>`;
+
   $('#f-ver').textContent = APP_VERSION;
   $('#f-analysis').textContent = S.lastAnalysis ?? NA;
   $('#f-clean').textContent = S.lastClean ?? NA;
@@ -186,7 +245,6 @@ function render() {
   if (cat !== S.ui.lastCat) { S.ui.lastCat = cat; S.ui.openCat = null; }   // mudou de categoria: abre a atual
   const id = r.page;
   const v = $('#view');
-  // Painel "Recomendado para este PC" entra logo depois do título da página (primeiro </section>).
   v.innerHTML = VIEWS[id](S, dataFor(S));
   v.classList.remove('enter');
   void v.offsetWidth;            // reinicia a animação de entrada
@@ -199,12 +257,6 @@ function render() {
   S.ui.lastHash = location.hash;
 }
 
-/* Mantém o foco em um controle depois de um render (para checkboxes). */
-function refocus(selector) {
-  const el = document.querySelector(selector);
-  if (el) el.focus();
-}
-
 /* ---------- Mudanças de configuração genéricas ---------- */
 
 function getPath(path) { return path.split('.').reduce((o, k) => (o ? o[k] : undefined), S); }
@@ -213,6 +265,68 @@ function setPath(path, value) {
   let o = S;
   for (const k of keys.slice(0, -1)) o = o[k];
   o[keys.at(-1)] = value;
+}
+
+/* Valores de data-value vêm como texto: números viram número (ex.: limite de GB, segundos). */
+const asValue = (v) => (/^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v);
+
+/* ---------- Arquivo do SCANNY: restaurar e remover (sempre com confirmação) ---------- */
+
+async function restoreArchived(ids) {
+  const items = S.archive.filter((a) => ids.includes(a.id));
+  if (!items.length) return;
+  const ready = items.filter((a) => a.status === 'so-scanny' && !a.conflict);
+  const blocked = items.filter((a) => !ready.includes(a));
+  if (!ready.length) {
+    const conflict = blocked.some((a) => a.conflict);
+    return toast(conflict
+      ? 'Não dá para restaurar: já existe um arquivo no caminho original.'
+      : 'Esses arquivos já estão no Windows.', conflict ? 'bad' : 'warn');
+  }
+  const ok = await openModal({
+    title: ready.length === 1 ? `Restaurar ${ready[0].name}` : `Restaurar ${ready.length} arquivos`,
+    body: `<p>Volta para o caminho original. A cópia continua no SCANNY até você removê-la.</p>
+      <ul class="plain-list">${ready.map((a) => `<li>${esc(a.path)}</li>`).join('')}</ul>
+      ${blocked.length ? alertBox('warn', `${blocked.length} ficam de fora`, 'Já estão no Windows ou há conflito no caminho original.') : ''}`,
+    buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Restaurar', value: 'ok', cls: 'primary' }],
+  });
+  if (ok !== 'ok') return;
+  ready.forEach((a) => {
+    a.status = 'nos-dois';
+    ARCH_SEL.delete(a.id);
+    logFile('restaurado', a.name, a.path, 'Restaurado para o caminho original');
+  });
+  pushHistory({
+    category: 'Arquivo do SCANNY', action: `Restaurar ${ready.length} arquivo(s)`, result: 'Restaurado',
+    undo: { type: 'archive', ids: ready.map((a) => a.id) },
+  });
+  render();
+  toast(`${ready.length} ${ready.length === 1 ? 'arquivo restaurado' : 'arquivos restaurados'}.`);
+}
+
+async function removeArchived(ids, title = 'Remover do arquivo do SCANNY') {
+  const items = S.archive.filter((a) => ids.includes(a.id));
+  if (!items.length) return;
+  const onlyCopy = items.filter((a) => a.status === 'so-scanny');
+  const ok = await openModal({
+    title,
+    danger: true,
+    body: `<p>A cópia sai do SCANNY e não volta.</p>
+      ${onlyCopy.length
+    ? alertBox('bad', `${onlyCopy.length} ${onlyCopy.length === 1 ? 'arquivo não existe' : 'arquivos não existem'} mais no Windows`, 'Remover agora apaga a única cópia.')
+    : '<p class="small muted">Os originais continuam no Windows.</p>'}
+      <ul class="plain-list">${items.slice(0, 8).map((a) => `<li>${esc(a.name)} <span class="muted small">· ${sizeText(a.size)}</span></li>`).join('')}${items.length > 8 ? `<li class="muted small">e mais ${items.length - 8}</li>` : ''}</ul>`,
+    buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Remover', value: 'ok', cls: 'danger' }],
+  });
+  if (ok !== 'ok') return;
+  items.forEach((a) => {
+    ARCH_SEL.delete(a.id);
+    logFile('removido', a.name, a.path, 'Removido do arquivo do SCANNY');
+  });
+  S.archive = S.archive.filter((a) => !ids.includes(a.id));
+  pushHistory({ category: 'Arquivo do SCANNY', action: `Remover ${items.length} do arquivo`, result: 'Não pode ser desfeito' });
+  render();
+  toast(`${items.length} ${items.length === 1 ? 'removido' : 'removidos'} do arquivo do SCANNY.`, 'warn');
 }
 
 /* ---------- Ações ---------- */
@@ -235,9 +349,11 @@ const ACTIONS = {
 
   async relatorio(tipo) {
     const d = dataFor(S);
+    const ar = archiveStats(S);
     const rows = [
       ['Versão do Windows', d.os.name ? `${d.os.name} ${d.os.version}` : NA],
       ['Discos', d.disks.map((x) => `${x.name}: ${gb(x.total - x.used)} livre`).join('; ') || NA],
+      ['Arquivo do SCANNY', `${ar.count} arquivos, ${sizeText(ar.used)}`],
       ['Análise em', S.analysis.when ?? NA],
     ];
     let text, mime, name = `scanny-relatorio.${tipo}`;
@@ -272,13 +388,6 @@ const ACTIONS = {
 
   async 'limpeza-run'() { await cleanRun(); },
 
-  'cache-toggle-all'(el) {
-    const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id);
-    S.clean.allTempCaches = !!el?.checked;
-    S.clean.selected = S.clean.allTempCaches ? [...new Set(ids)] : [];
-    render();
-  },
-
   async 'cache-open'(id) {
     if (!SCANNY_NATIVE.available) return toast('Abrir pastas só está disponível na aplicação Windows.', 'warn');
     try { const path = await SCANNY_NATIVE.openCacheFolder(id); toast(`Pasta aberta: ${path}`); }
@@ -287,14 +396,13 @@ const ACTIONS = {
 
   'limpeza-clear'() {
     S.clean.selected = [];
-    S.clean.allTempCaches = false;
     S.clean.recycle = false;
     S.clean.browser = false;
     render();
   },
 
   'limpeza-nova'() {
-    S.clean = { ...S.clean, analyzed: false, result: null, selected: [], allTempCaches: false, recycle: false, browser: false };
+    S.clean = { ...S.clean, analyzed: false, result: null, selected: [], recycle: false, browser: false };
     render();
   },
 
@@ -338,10 +446,6 @@ const ACTIONS = {
       buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Aplicar', value: 'ok', cls: 'primary' }],
     });
     if (ok !== 'ok') return;
-    if (SCANNY_NATIVE.available) {
-      try { await SCANNY_NATIVE.visualProfile(S.effects.profile); }
-      catch (err) { return toast(`Não foi possível aplicar o perfil: ${err}`, 'bad'); }
-    }
     S.effects.previous = prev;
     S.effects.current = target;
     pushHistory({
@@ -426,21 +530,35 @@ const ACTIONS = {
     });
   },
 
+  /* Excluir arquivos grandes: simulado. Com a opção ligada, cada um vai antes para o Arquivo do SCANNY. */
   async 'big-delete'() {
-    const picked = [...document.querySelectorAll('[data-check="big"]:checked')].map((i) => dataFor(S).largeFiles[Number(i.value)]).filter(Boolean);
+    const paths = [...document.querySelectorAll('[data-check="big"]:checked')].map((i) => i.value);
+    const picked = dataFor(S).largeFiles.filter((f) => paths.includes(f.path) && !S.gone[f.path]);
     if (!picked.length) return toast('Escolha ao menos um arquivo.', 'warn');
+    const keep = S.settings.archiveBeforeDelete;
     const ok = await openModal({
       title: 'Excluir arquivos',
       danger: true,
       body: `<p>Você escolheu ${picked.length} arquivo(s). Eles não são enviados para a lixeira.</p>
+        ${keep
+    ? '<p>Uma cópia vai para o <strong>Arquivo do SCANNY</strong> antes de sair do Windows. Você pode restaurar depois.</p>'
+    : alertBox('bad', 'Sem cópia', 'Com "Guardar cópia antes de excluir" desligado, a exclusão não pode ser desfeita.')}
         <ul class="plain-list">${picked.map((f) => `<li>${esc(f.path)}</li>`).join('')}</ul>
         <p class="small muted">Protótipo: nenhum arquivo é removido de verdade aqui.</p>`,
       buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Excluir', value: 'ok', cls: 'danger' }],
     });
     if (ok !== 'ok') return;
-    pushHistory({ category: 'Armazenamento', action: `Excluir ${picked.length} arquivo(s) escolhidos`, result: 'Simulado (protótipo)' });
+    picked.forEach((f) => {
+      if (keep) archiveFile(f, 'Arquivo grande');
+      else logFile('removido', f.name, f.path, 'Excluído sem cópia');
+      S.gone[f.path] = true;
+    });
+    pushHistory({
+      category: 'Armazenamento', action: `Excluir ${picked.length} arquivo(s) escolhidos`,
+      result: keep ? 'Cópia guardada no SCANNY (simulado)' : 'Sem cópia (simulado)',
+    });
     render();
-    toast('Simulado: nada foi excluído no protótipo.', 'warn');
+    toast(keep ? 'Simulado: cópias guardadas no Arquivo do SCANNY.' : 'Simulado: nada foi excluído de verdade.', 'warn');
   },
 
   async restore() {
@@ -450,14 +568,27 @@ const ACTIONS = {
       buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Criar', value: 'ok', cls: 'primary' }],
     });
     if (ok !== 'ok') return;
-    if (SCANNY_NATIVE.available) {
-      try { await SCANNY_NATIVE.restorePoint(); }
-      catch (err) { pushHistory({ category: 'Segurança e restauração', action: 'Criar ponto de restauração', result: `Falhou: ${err}` }); render(); return toast(`Falha ao criar ponto: ${err}`, 'bad'); }
-    } else { await runSteps(3, () => {}, { delay: 500 }); }
-    pushHistory({ category: 'Segurança e restauração', action: 'Criar ponto de restauração', result: SCANNY_NATIVE.available ? 'Solicitado ao Windows' : 'Criado (protótipo)' });
+    await runSteps(3, () => {}, { delay: 500 });
+    pushHistory({ category: 'Segurança e restauração', action: 'Criar ponto de restauração', result: 'Criado (protótipo)' });
     render();
     toast('Ponto de restauração criado.');
   },
+
+  /* Arquivo do SCANNY */
+  'arq-restaurar'(id) { return restoreArchived([id]); },
+  'arq-restaurar-sel'() { return restoreArchived([...ARCH_SEL]); },
+  'arq-remover'(id) { return removeArchived([id]); },
+  'arq-remover-sel'() { return removeArchived([...ARCH_SEL]); },
+  'arq-sel-clear'() { ARCH_SEL.clear(); refreshArchive(S); },
+  'arq-status'(arg) { S.ui.archStatus = arg; render(); },
+  'arq-limpar'() { S.ui.archQuery = ''; S.ui.archStatus = 'todos'; S.ui.archType = 'todos'; render(); },
+  'arq-esvaziar'() { return removeArchived(S.archive.map((a) => a.id), 'Esvaziar o Arquivo do SCANNY'); },
+
+  /* Recentes */
+  'rec-filter'(arg) { S.ui.recFilter = arg; render(); },
+
+  /* Ao vivo: taxa de atualização (0 = pausado). */
+  refresh(arg) { S.ui.refresh = Number(arg); LIVE.elapsed = 0; render(); },
 
   'undo'(id) { undoEntry(id); },
 
@@ -484,12 +615,14 @@ const ACTIONS = {
     const ok = await openModal({
       title: 'Apagar dados do SCANNY',
       danger: true,
-      body: '<p>Remove configurações, histórico e logs do SCANNY. Não toca nos seus arquivos.</p>',
+      body: '<p>Remove configurações, histórico, registro e o Arquivo do SCANNY. Não toca nos seus arquivos originais.</p>',
       buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Apagar', value: 'ok', cls: 'danger' }],
     });
     if (ok !== 'ok') return;
     store.clear();
     S = clone(DEFAULT_STATE);
+    ARCH_SEL.clear();
+    LIVE.cpu = []; LIVE.ram = []; LIVE.disk = [];
     render();
     toast('Dados do SCANNY apagados.');
   },
@@ -560,57 +693,37 @@ async function cleanAnalyze() {
   S.clean = { ...S.clean, running: false, analyzed: true, selected: safe, allTempCaches: true, recycle: false, browser: false };
   render();
 }
-
 async function cleanRun() {
   const d = dataFor(S);
   if (SCANNY_NATIVE.available) {
     const ids = (S.nativeCleanup || []).filter((x) => S.clean.selected.includes(x.id)).map((x) => x.id);
     if (!ids.length) return toast('Selecione pelo menos um cache temporário analisado.', 'warn');
-    const ok = await openModal({ title: 'Confirmar limpeza segura', danger: true, body: `<p>O SCANNY removerá apenas o conteúdo das pastas de cache temporário selecionadas.</p><p class="small muted">A pasta-base, Downloads, documentos, dados pessoais e ficheiros recentes/em uso ficam protegidos. Nada fora da lista permitida será tocado.</p>`, buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar caches', value: 'ok', cls: 'danger' }] });
+    const ok = await openModal({ title: 'Confirmar limpeza segura', danger: true, body: '<p>O SCANNY removerá apenas o conteúdo das pastas de cache temporário selecionadas.</p><p class="small muted">A pasta-base, Downloads, documentos, dados pessoais e ficheiros recentes/em uso ficam protegidos.</p>', buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar caches', value: 'ok', cls: 'danger' }] });
     if (ok !== 'ok') return;
-    try { const [freed, removed] = await SCANNY_NATIVE.cleanCacheIds(ids); S.clean = { ...S.clean, analyzed: true, selected: [], allTempCaches: false, result: { freed: freed / 1073741824, skipped: 0, errors: 0, time: `${removed} arquivo(s)` } }; S.lastClean = nowText(); pushHistory({ category: 'Caches e Dados', action: 'Limpeza de caches temporários', result: `${removed} arquivo(s) removido(s)` }); render(); return toast(`Limpeza concluída: ${removed} arquivo(s) removido(s).`); } catch (err) { return toast(`Falha na limpeza: ${err}`, 'bad'); }
+    try {
+      const [freed, removed] = await SCANNY_NATIVE.cleanCacheIds(ids);
+      S.clean = { ...S.clean, analyzed: true, selected: [], allTempCaches: false, result: { freed: freed / 1073741824, skipped: 0, errors: 0, time: `${removed} arquivo(s)` } };
+      S.lastClean = nowText();
+      pushHistory({ category: 'Caches e Dados', action: 'Limpeza de caches temporários', result: `${removed} arquivo(s) removido(s)` });
+      render();
+      return toast(`Limpeza concluída: ${removed} arquivo(s) removido(s).`);
+    } catch (err) { return toast(`Falha na limpeza: ${err}`, 'bad'); }
   }
   if (!S.settings.sample) return toast('Ative os dados de exemplo para simular a limpeza.', 'warn');
-
   const items = d.cleanup.filter((c) => S.clean.selected.includes(c.id)).map((c) => ({ name: c.name, size: c.size }));
   if (S.clean.recycle) items.push({ name: 'Lixeira', size: d.recycle.size });
   if (S.clean.browser) items.push({ name: 'Cache de navegadores', size: d.browserCache.size });
   if (!items.length) return;
-
   const total = items.reduce((a, i) => a + i.size, 0);
-  const ok = await openModal({
-    title: 'Confirmar limpeza',
-    danger: true,
-    body: `<p>O SCANNY vai remover estes itens, um de cada vez:</p>
-      <ul class="plain-list">${items.map((i) => `<li>${esc(i.name)} <span class="muted small">· ${gb(i.size)}</span></li>`).join('')}</ul>
-      <p class="small muted">Espaço estimado: <strong>${gb(total)}</strong>. Arquivos em uso são ignorados. Cada remoção fica registrada.</p>`,
-    buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar agora', value: 'ok', cls: 'danger' }],
-  });
+  const ok = await openModal({ title: 'Confirmar limpeza', danger: true, body: `<p>O SCANNY vai remover estes itens, um de cada vez:</p><ul class="plain-list">${items.map((i) => `<li>${esc(i.name)} <span class="muted small">· ${gb(i.size)}</span></li>`).join('')}</ul><p class="small muted">Espaço estimado: <strong>${gb(total)}</strong>. Temporários não entram no Arquivo do SCANNY.</p>`, buttons: [{ label: 'Cancelar', value: 'no', cls: 'ghost' }, { label: 'Limpar agora', value: 'ok', cls: 'danger' }] });
   if (ok !== 'ok') return;
-
-  const t0 = Date.now();
-  S.clean.running = true;
-  S.clean.progress = { label: 'Preparando…', done: 0, total: items.length };
-  render();
+  const t0 = Date.now(); S.clean.running = true; S.clean.progress = { label: 'Preparando…', done: 0, total: items.length }; render();
   let freed = 0;
-  await runSteps(items.length, (i) => {
-    freed += items[i].size;
-    S.clean.progress = { label: `Removendo ${items[i].name}`, done: i + 1, total: items.length };
-    render();
-  }, { delay: 450 });
-
+  await runSteps(items.length, (i) => { freed += items[i].size; S.clean.progress = { label: `Removendo ${items[i].name}`, done: i + 1, total: items.length }; render(); }, { delay: 450 });
   const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
-  S.clean = {
-    ...S.clean,
-    running: false, progress: null, analyzed: true, selected: [], allTempCaches: false, recycle: false, browser: false,
-    result: { freed, skipped: 0, errors: 0, time: `${secs} s` },
-  };
-  S.lastClean = nowText();
-  pushHistory({ category: 'Limpeza', action: `Limpeza de ${items.length} item(ns)`, result: `${gb(freed)} liberados` });
-  render();
-  toast(`Limpeza concluída: ${gb(freed)} liberados.`);
+  S.clean = { ...S.clean, running: false, progress: null, analyzed: true, selected: [], allTempCaches: false, recycle: false, browser: false, result: { freed, skipped: 0, errors: 0, time: `${secs} s` } };
+  S.lastClean = nowText(); pushHistory({ category: 'Limpeza', action: `Limpeza de ${items.length} item(ns)`, result: `${gb(freed)} liberados` }); render(); toast(`Limpeza concluída: ${gb(freed)} liberados.`);
 }
-
 /* ---------- Reparos ---------- */
 
 async function repairRun(r) {
@@ -620,15 +733,10 @@ async function repairRun(r) {
   render();
 
   const script = ['Verificando componentes…', 'Aplicando correções…', 'Concluindo…'];
-  if (SCANNY_NATIVE.available) {
-    try { const output = await SCANNY_NATIVE.repair(r.id); S.repair.lines.push(output || 'Concluído.'); }
-    catch (err) { S.repair.lines.push(String(err)); }
-  } else {
-    await runSteps(script.length, (i) => {
-      S.repair.lines.push(`[simulação] ${script[i]}`);
-      render();
-    }, { delay: 800, signal: repairSignal });
-  }
+  await runSteps(script.length, (i) => {
+    S.repair.lines.push(`[simulação] ${script[i]}`);
+    render();
+  }, { delay: 800, signal: repairSignal });
 
   const cancelled = repairSignal.cancelled;
   S.repair = {
@@ -652,6 +760,7 @@ function undoEntry(id, rerender = true) {
   if (u.type === 'privacy') S.privacy[u.key] = u.value;
   if (u.type === 'effects') S.effects.current = { ...u.prev };
   if (u.type === 'power') S.powerPlan = u.value;
+  if (u.type === 'archive') S.archive.forEach((a) => { if (u.ids.includes(a.id)) a.status = 'so-scanny'; });
   h.undo = null;
   h.result = 'Desfeito';
   pushHistory({ category: h.category, action: `Desfazer: ${h.action}`, before: h.after, after: h.before });
@@ -676,6 +785,20 @@ async function copyText(text) {
   catch (e) { toast('Não foi possível copiar. Selecione o texto e copie.', 'warn'); }
 }
 
+/* Relógio das telas ao vivo: a cada segundo atualiza a barra de próxima leitura e,
+ * quando chega a hora, faz uma nova leitura. Só mexe na tela; não refaz a página. */
+function startTicker() {
+  setInterval(() => {
+    const page = parseRoute().page;
+    if (!S.settings.sample || (page !== 'visao-geral' && page !== 'ao-vivo')) return;
+    if (S.ui.refresh) {
+      LIVE.elapsed += 1;
+      if (LIVE.elapsed >= S.ui.refresh) { LIVE.elapsed = 0; liveStep(S); }
+    }
+    liveDom(S);
+  }, 1000);
+}
+
 /* ---------- Eventos (um único ponto de entrada) ---------- */
 
 function bindEvents() {
@@ -686,18 +809,48 @@ function bindEvents() {
     if (t.dataset.toggle) {
       setPath(t.dataset.toggle, !getPath(t.dataset.toggle));
       if (t.dataset.toggle === 'settings.theme') applyTheme();
+      if (t.dataset.toggle === 'settings.sample' && S.settings.sample) seedSample();
       return render();
     }
     if (t.dataset.set) {
-      setPath(t.dataset.set, t.dataset.value);
+      setPath(t.dataset.set, asValue(t.dataset.value));
       return render();
     }
     const fn = ACTIONS[t.dataset.action];
     if (fn) fn(t.dataset.arg, t);
   });
 
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    /* Busca do Arquivo: redesenha só a lista, para não perder o foco do campo. */
+    if (t.dataset.archive === 'query') {
+      S.ui.archQuery = t.value;
+      refreshArchive(S);
+      return save();
+    }
+    /* Busca do menu: filtra os itens da barra lateral. */
+    if (t.id === 'nav-q') {
+      NAV_Q = t.value;
+      buildNav();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.target.id === 'nav-q' && e.key === 'Enter') {
+      const first = document.querySelector('#nav .sub-item');
+      if (first) first.click();
+    }
+  });
+
   document.addEventListener('change', async (e) => {
     const t = e.target;
+
+    if (t.dataset.archive === 'sort') { S.ui.archSort = t.value; refreshArchive(S); return save(); }
+    if (t.dataset.archive === 'type') { S.ui.archType = t.value; refreshArchive(S); return save(); }
+    if (t.dataset.check === 'arch') {
+      if (t.checked) ARCH_SEL.add(t.value); else ARCH_SEL.delete(t.value);
+      return refreshArchive(S);
+    }
 
     if (t.dataset.check === 'clean') {
       const id = t.value;
@@ -708,12 +861,7 @@ function bindEvents() {
     }
     if (t.dataset.check === 'recycle') { S.clean.recycle = t.checked; return render(); }
     if (t.dataset.check === 'browser') { S.clean.browser = t.checked; return render(); }
-    if (t.dataset.check === 'all-caches') {
-      const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id);
-      S.clean.allTempCaches = t.checked;
-      S.clean.selected = t.checked ? [...new Set(ids)] : [];
-      return render();
-    }
+    if (t.dataset.check === 'all-caches') { const ids = (S.nativeCleanup || dataFor(S).cacheFolders || []).map((x) => x.id); S.clean.allTempCaches = t.checked; S.clean.selected = t.checked ? [...new Set(ids)] : []; return render(); }
     if (t.dataset.check === 'effect') {
       S.effects.custom = { ...(S.effects.custom || S.effects.current), [t.value]: t.checked };
       render();
@@ -744,6 +892,7 @@ function bindEvents() {
         S.analysis = { status: 'idle', step: 0, results: false, when: null };
         S.clean = { ...DEFAULT_STATE.clean };
         S.repair = null;
+        ARCH_SEL.clear();
         render();
         toast('Backup importado.');
       } catch (err) {
@@ -756,32 +905,31 @@ function bindEvents() {
   window.addEventListener('hashchange', render);
 }
 
+/* Mantém o foco em um controle depois de um render (para checkboxes). */
+function refocus(selector) {
+  const el = document.querySelector(selector);
+  if (el) el.focus();
+}
+
 /* ---------- Início ---------- */
 
 function init() {
   S = mergeState(DEFAULT_STATE, store.load(DEFAULT_STATE));
-  // O executável desktop nunca usa os dados fictícios do modo demonstração.
-  if (SCANNY_NATIVE.available) S.settings.sample = false;
   // Estados de execução nunca sobrevivem a um recarregamento.
   S.analysis = { ...S.analysis, status: S.analysis.results ? 'done' : 'idle' };
   S.clean = { ...S.clean, running: false, progress: null };
   S.repair = null;
+  if (S.settings.sample) seedSample();   // dados de exemplo já ligados antes desta versão
   applyTheme();
   document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = icon(el.dataset.icon); });
   buildNav();
   bindEvents();
+  startTicker();
   if (!location.hash) history.replaceState(null, '', '#/visao-geral');
   render();
   if (SCANNY_NATIVE.available) loadNativeSnapshot();
 }
 
-async function loadNativeSnapshot() {
-  try {
-    S.nativeData = await SCANNY_NATIVE.snapshot();
-    render();
-  } catch (err) {
-    console.warn('SCANNY: coleta nativa indisponível', err);
-  }
-}
-
 init();
+
+async function loadNativeSnapshot() { try { S.nativeData = await SCANNY_NATIVE.snapshot(); render(); } catch (err) { console.warn('SCANNY: coleta nativa indisponível', err); } }

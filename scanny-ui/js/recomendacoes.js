@@ -126,6 +126,24 @@ function recommendations(S) {
     act: { label: 'Criar ponto agora', kind: 'action', arg: 'restore' },
   });
 
+  /* Arquivo do SCANNY: passou do limite de espaço */
+  const archUsed = (S.archive || []).reduce((a, x) => a + (x.size || 0), 0);
+  if (archUsed > S.settings.archiveLimit) push({
+    id: 'arquivo-limite', level: 1, page: 'arquivo', risk: 'seguro',
+    title: `Arquivo do SCANNY com ${gb(archUsed)}, acima do limite de ${S.settings.archiveLimit} GB`,
+    why: 'Remova cópias que você não precisa mais ou aumente o limite. O SCANNY não apaga nada sozinho.',
+    act: { label: 'Ver arquivo', kind: 'go', arg: 'arquivo' },
+  });
+
+  /* Arquivo do SCANNY: cópias antigas que são a única cópia do arquivo */
+  const oldOnly = (S.archive || []).filter((x) => x.status === 'so-scanny' && (daysSince(x.archivedAt.split(' ')[0]) ?? 0) > 90);
+  if (oldOnly.length) push({
+    id: 'arquivo-antigo', level: 2, page: 'arquivo', risk: 'baixo',
+    title: `${oldOnly.length} ${oldOnly.length === 1 ? 'cópia antiga é' : 'cópias antigas são'} a única cópia`,
+    why: `Guardadas há mais de 90 dias. Ex.: ${oldOnly[0].name}. O original já saiu do Windows, então confira antes de remover.`,
+    act: { label: 'Revisar arquivo', kind: 'go', arg: 'arquivo' },
+  });
+
   return out.sort((a, b) => LEVEL_ORDER.indexOf(a.level) - LEVEL_ORDER.indexOf(b.level));
 }
 
