@@ -11,7 +11,8 @@ use walkdir::WalkDir;
 fn ps_json(script: &str) -> Result<Value, String> {
     let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).output().map_err(|e| e.to_string())?;
     if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()); }
-    serde_json::from_slice(&out.stdout).map_err(|e| format!("Resposta inválida do Windows: {e}"))
+    let output = String::from_utf8_lossy(&out.stdout).trim_start_matches('\u{feff}').trim().to_string();
+    serde_json::from_str(&output).map_err(|e| format!("Resposta inválida do Windows: {e}"))
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -27,6 +28,7 @@ fn number(v: &Value, key: &str) -> Option<f64> {
 fn system_snapshot() -> Result<SystemSnapshot, String> {
     if !cfg!(windows) { return Err("A coleta nativa está disponível somente no Windows".into()); }
     let script = r#"
+$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name,NumberOfCores,NumberOfLogicalProcessors,LoadPercentage,MaxClockSpeed
 $cs = Get-CimInstance Win32_ComputerSystem
 $os = Get-CimInstance Win32_OperatingSystem
@@ -35,7 +37,9 @@ $disks = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Obje
 $procs = @(Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 Id,ProcessName,CPU,WorkingSet64)
 $bat = @(Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining)
 $def = Get-MpComputerStatus -ErrorAction SilentlyContinue
-[pscustomobject]@{ cpu=$cpu; os=$os; gpu=$gpu; disks=$disks; procs=$procs; totalRam=$cs.TotalPhysicalMemory; freeRam=$os.FreePhysicalMemory; battery=$bat; defender=if($def){$def.RealTimeProtectionEnabled}else{$null} } | ConvertTo-Json -Depth 5 -Compress
+$defender = $null
+if ($def) { $defender = $def.RealTimeProtectionEnabled }
+[pscustomobject]@{ cpu=$cpu; os=$os; gpu=$gpu; disks=$disks; procs=$procs; totalRam=$cs.TotalPhysicalMemory; freeRam=$os.FreePhysicalMemory; battery=$bat; defender=$defender } | ConvertTo-Json -Depth 5 -Compress
 "#;
     let raw = ps_json(script)?;
     let cpu = raw.get("cpu").cloned().unwrap_or(Value::Null);
