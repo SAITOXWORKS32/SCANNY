@@ -3,66 +3,46 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::{env, fs, path::{Path, PathBuf}, process::Command};
+use sysinfo::{Disks, System};
 use walkdir::WalkDir;
 
 #[derive(Serialize)] struct Item { id: String, name: String, bytes: u64, files: u64 }
 #[derive(Serialize)] struct NativeInfo { os: String, arch: String, temp: String, windows_temp: String }
-
-fn ps_json(script: &str) -> Result<Value, String> {
-    let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).output().map_err(|e| e.to_string())?;
-    if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()); }
-    let output = if out.stdout.starts_with(&[0xff, 0xfe]) {
-        let units: Vec<u16> = out.stdout[2..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
-        String::from_utf16_lossy(&units)
-    } else {
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
-    let clean = output.trim_start_matches('\u{feff}').trim();
-    let start = clean.find('{').ok_or_else(|| "O Windows não retornou dados JSON".to_string())?;
-    let end = clean.rfind('}').ok_or_else(|| "Resposta incompleta do Windows".to_string())? + 1;
-    serde_json::from_str(&clean[start..end]).map_err(|e| format!("Resposta inválida do Windows: {e}"))
-}
-
-fn text(v: &Value, key: &str) -> Option<String> {
-    v.get(key).and_then(|x| x.as_str().map(ToString::to_string).or_else(|| Some(x.to_string().trim_matches('"').to_string())))
-}
-fn number(v: &Value, key: &str) -> Option<f64> {
-    v.get(key).and_then(|x| x.as_f64().or_else(|| x.as_u64().map(|n| n as f64)).or_else(|| x.as_str()?.parse().ok()))
-}
-
 #[derive(Serialize)] struct SystemSnapshot { os: Value, cpu: Value, gpu: Vec<Value>, ram: Value, disks: Vec<Value>, processes: Vec<Value>, power: Value, security: Value }
 
 #[tauri::command]
 fn system_snapshot() -> Result<SystemSnapshot, String> {
-    if !cfg!(windows) { return Err("A coleta nativa está disponível somente no Windows".into()); }
-    let script = r#"
-$OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name,NumberOfCores,NumberOfLogicalProcessors,LoadPercentage,MaxClockSpeed
-$cs = Get-CimInstance Win32_ComputerSystem
-$os = Get-CimInstance Win32_OperatingSystem
-$gpu = @(Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM,DriverVersion)
-$disks = @(Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,FileSystem,Size,FreeSpace)
-$procs = @(Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 Id,ProcessName,CPU,WorkingSet64)
-$bat = @(Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining)
-$def = Get-MpComputerStatus -ErrorAction SilentlyContinue
-$defender = $null
-if ($def) { $defender = $def.RealTimeProtectionEnabled }
-[pscustomobject]@{ cpu=$cpu; os=$os; gpu=$gpu; disks=$disks; procs=$procs; totalRam=$cs.TotalPhysicalMemory; freeRam=$os.FreePhysicalMemory; battery=$bat; defender=$defender } | ConvertTo-Json -Depth 5 -Compress
-"#;
-    let raw = ps_json(script)?;
-    let cpu = raw.get("cpu").cloned().unwrap_or(Value::Null);
-    let osraw = raw.get("os").cloned().unwrap_or(Value::Null);
-    let total_ram = number(&raw, "totalRam").unwrap_or(0.0) / 1073741824.0;
-    let free_ram = number(&raw, "freeRam").unwrap_or(0.0) / 1048576.0;
-    let used_ram = (total_ram - free_ram).max(0.0);
-    let cpu_name = text(&cpu, "Name").unwrap_or_else(|| "Processador".into());
-    let cpu_usage = number(&cpu, "LoadPercentage").unwrap_or(0.0);
-    let gpu = raw.get("gpu").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().map(|g| serde_json::json!({"name": text(&g,"Name").unwrap_or_else(|| "GPU".into()), "vendor":"windows", "vram": number(&g,"AdapterRAM").unwrap_or(0.0)/1073741824.0, "driver": text(&g,"DriverVersion").unwrap_or_default(), "integrated": false})).collect();
-    let disks = raw.get("disks").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().filter_map(|d| { let total=number(&d,"Size")? / 1073741824.0; let free=number(&d,"FreeSpace")? / 1073741824.0; Some(serde_json::json!({"id": text(&d,"DeviceID").unwrap_or_default().to_lowercase(), "name": format!("Disco {}", text(&d,"DeviceID").unwrap_or_default()), "type": text(&d,"FileSystem").unwrap_or_else(|| "Windows".into()), "total": total, "used": (total-free).max(0.0)})) }).collect();
-    let processes = raw.get("procs").and_then(Value::as_array).cloned().unwrap_or_default().into_iter().map(|p| serde_json::json!({"pid": p.get("Id").cloned().unwrap_or(Value::Null), "name": text(&p,"ProcessName").unwrap_or_default(), "cpu": number(&p,"CPU").unwrap_or(0.0), "ram": number(&p,"WorkingSet64").unwrap_or(0.0)/1073741824.0, "user":"Usuário", "system":false, "protected":false, "path":""})).collect();
-    let battery = raw.get("battery").and_then(Value::as_array).and_then(|a| a.first()).and_then(|b| number(b,"EstimatedChargeRemaining"));
-    let defender = raw.get("defender").and_then(Value::as_bool);
-    Ok(SystemSnapshot { os: serde_json::json!({"name": text(&osraw,"Caption").unwrap_or_else(|| "Windows".into()), "version": text(&osraw,"Version").unwrap_or_default(), "arch": env::consts::ARCH, "privileges":"Usuário normal"}), cpu: serde_json::json!({"name":cpu_name,"cores":number(&cpu,"NumberOfCores"),"threads":number(&cpu,"NumberOfLogicalProcessors"),"usage":cpu_usage,"temp":null,"freq":number(&cpu,"MaxClockSpeed").map(|n| format!("{:.1} GHz",n/1000.0)),"top":null}), gpu, ram: serde_json::json!({"total":total_ram,"used":used_ram,"speed":null,"type":null,"sticks":null,"top":null}), disks, processes, power: serde_json::json!({"current":null,"plans":[],"battery":battery,"laptop":battery.is_some()}), security: serde_json::json!({"defender":defender,"firewall":null,"update":null,"pendingReboot":null,"lastRestore":null}) })
+    let mut system = System::new_all().map_err(|e| e.to_string())?;
+    system.refresh_all();
+    let total_ram = system.total_memory() as f64 / 1073741824.0;
+    let used_ram = system.used_memory() as f64 / 1073741824.0;
+    let cpu = system.cpus().first();
+    let cpu_name = cpu.map(|c| c.brand().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Processador".into());
+    let cpu_freq = cpu.map(|c| format!("{:.1} GHz", c.frequency() as f64 / 1000.0));
+    let cpu_usage = system.global_cpu_usage();
+    let mut disks = Vec::new();
+    let disks_source = Disks::new_with_refreshed_list().map_err(|e| e.to_string())?;
+    for disk in &disks_source {
+        let total = disk.total_space() as f64 / 1073741824.0;
+        let used = (disk.total_space().saturating_sub(disk.available_space())) as f64 / 1073741824.0;
+        let mount = disk.mount_point().to_string_lossy().to_string();
+        disks.push(serde_json::json!({"id": mount.to_lowercase(), "name": format!("Disco {}", mount), "type": disk.file_system().to_string_lossy(), "total": total, "used": used}));
+    }
+    let mut process_list: Vec<_> = system.processes().values().collect();
+    process_list.sort_by(|a, b| b.memory().cmp(&a.memory()));
+    let processes = process_list.into_iter().take(8).map(|p| serde_json::json!({"pid": p.pid().as_u32(), "name": p.name().to_string_lossy(), "cpu": p.cpu_usage(), "ram": p.memory() as f64 / 1073741824.0, "user":"Usuário", "system":false, "protected":false, "path": p.exe().map(|x| x.to_string_lossy().to_string()).unwrap_or_default()})).collect();
+    let os_name = System::name().unwrap_or_else(|_| "Windows".into());
+    let os_version = System::os_version().unwrap_or_default();
+    Ok(SystemSnapshot {
+        os: serde_json::json!({"name": os_name, "version": os_version, "arch": env::consts::ARCH, "privileges":"Usuário normal"}),
+        cpu: serde_json::json!({"name":cpu_name,"cores":system.cpus().len(),"threads":system.cpus().len(),"usage":cpu_usage,"temp":null,"freq":cpu_freq,"top":null}),
+        gpu: Vec::new(),
+        ram: serde_json::json!({"total":total_ram,"used":used_ram,"speed":null,"type":null,"sticks":null,"top":null}),
+        disks,
+        processes,
+        power: serde_json::json!({"current":null,"plans":[],"battery":null,"laptop":false}),
+        security: serde_json::json!({"defender":null,"firewall":null,"update":null,"pendingReboot":null,"lastRestore":null}),
+    })
 }
 
 fn bytes_in(path: &Path) -> (u64, u64) {
