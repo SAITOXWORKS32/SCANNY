@@ -34,6 +34,7 @@ const DEFAULT_STATE = {
   lastAnalysis: null,
   lastClean: null,
   lastBackup: null,
+  nativeData: null,
   ui: { perfTab: 'efeitos', initFilter: 'todos', histFilter: 'todas' },
 };
 
@@ -736,6 +737,16 @@ function init() {
   bindEvents();
   if (!location.hash) history.replaceState(null, '', '#/visao-geral');
   render();
+  if (SCANNY_NATIVE.available) loadNativeSnapshot();
+}
+
+async function loadNativeSnapshot() {
+  try {
+    S.nativeData = await SCANNY_NATIVE.snapshot();
+    render();
+  } catch (err) {
+    console.warn('SCANNY: coleta nativa indisponível', err);
+  }
 }
 
 init();

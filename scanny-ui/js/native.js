@@ -6,6 +6,7 @@ window.SCANNY_NATIVE = {
     return window.__TAURI__.core.invoke(command, args || {});
   },
   async info() { return this.invoke('system_info'); },
+  async snapshot() { return this.invoke('system_snapshot'); },
   async analyzeCleanup() { return this.invoke('analyze_cleanup'); },
   async cleanPaths(paths) { return this.invoke('clean_paths', { paths }); },
   async visualProfile(profile) { return this.invoke('apply_visual_profile', { profile }); },

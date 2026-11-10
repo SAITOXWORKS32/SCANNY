@@ -36,7 +36,11 @@ const EMPTY_DATA = {
   repairs: SCANNY_SAMPLE.repairs,
 };
 
-function dataFor(S) { return S.settings.sample ? SCANNY_SAMPLE : EMPTY_DATA; }
+function dataFor(S) {
+  if (S.settings.sample) return SCANNY_SAMPLE;
+  if (S.nativeData) return { ...EMPTY_DATA, ...S.nativeData };
+  return EMPTY_DATA;
+}
 
 /* Classificação de item de inicialização: texto curto e estado em tons de cinza. */
 const CLS_LABEL = { baixo: 'Comum', analisar: 'Confira antes', essencial: 'Essencial', desconhecido: 'Desconhecido' };
