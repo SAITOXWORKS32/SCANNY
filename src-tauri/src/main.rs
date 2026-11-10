@@ -11,8 +11,16 @@ use walkdir::WalkDir;
 fn ps_json(script: &str) -> Result<Value, String> {
     let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]).output().map_err(|e| e.to_string())?;
     if !out.status.success() { return Err(String::from_utf8_lossy(&out.stderr).trim().to_string()); }
-    let output = String::from_utf8_lossy(&out.stdout).trim_start_matches('\u{feff}').trim().to_string();
-    serde_json::from_str(&output).map_err(|e| format!("Resposta inválida do Windows: {e}"))
+    let output = if out.stdout.starts_with(&[0xff, 0xfe]) {
+        let units: Vec<u16> = out.stdout[2..].chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let clean = output.trim_start_matches('\u{feff}').trim();
+    let start = clean.find('{').ok_or_else(|| "O Windows não retornou dados JSON".to_string())?;
+    let end = clean.rfind('}').ok_or_else(|| "Resposta incompleta do Windows".to_string())? + 1;
+    serde_json::from_str(&clean[start..end]).map_err(|e| format!("Resposta inválida do Windows: {e}"))
 }
 
 fn text(v: &Value, key: &str) -> Option<String> {
