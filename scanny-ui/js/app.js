@@ -2,7 +2,7 @@
  * Regra de ouro: analisar nunca altera nada. Toda mudança passa por confirmação (quando necessária),
  * é registrada no histórico e, quando possível, pode ser desfeita. */
 
-const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.0 (desktop)' : '1.0.0 (protótipo)';
+const APP_VERSION = SCANNY_NATIVE?.available ? '1.0.1 (desktop)' : '1.0.1 (protótipo)';
 
 const DEFAULT_STATE = {
   settings: {
